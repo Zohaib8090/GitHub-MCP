@@ -23,8 +23,12 @@ Actions secrets, and a generic REST escape hatch (`gh_api`) that can call any en
    - Authorization callback URL: `https://YOUR-SERVICE.onrender.com/github/callback`
    - Generate a client secret.
 3. **Set environment variables** on the service (see [`.env.example`](.env.example)):
-   `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `PUBLIC_URL`, `ENCRYPTION_KEY` (`openssl rand -base64 32`),
-   `ALLOWED_GITHUB_USERS`.
+   `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `ALLOWED_GITHUB_USERS`.
+   With the included `render.yaml` blueprint, Render also generates `ENCRYPTION_KEY` for you and the server
+   reads its own URL from `RENDER_EXTERNAL_URL`, so you do not set `PUBLIC_URL`. On other hosts set `PUBLIC_URL`
+   and `ENCRYPTION_KEY` (`openssl rand -base64 32`) yourself.
+   The default Render URL is `https://github-mcp.onrender.com`. If Render gives you a different URL, update the
+   OAuth App's callback URL to match.
 4. **Add the connector in Claude**: Settings -> Connectors -> Add custom connector ->
    `https://YOUR-SERVICE.onrender.com/mcp`. Claude registers itself, shows a consent page, sends you through the
    GitHub login, and you are connected. Works on web, desktop and mobile.

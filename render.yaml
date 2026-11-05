@@ -1,21 +1,30 @@
+# Render Blueprint: Dashboard -> New -> Blueprint -> pick this repo.
+# Render only detects this exact filename (render.yaml).
 services:
   - type: web
-    name: github-mcp
+    name: github-mcp            # your URL becomes https://github-mcp.onrender.com (a suffix is added if the name is taken)
     runtime: node
     plan: free
+    region: singapore           # closest Render region to Pakistan; change if you like
+    autoDeployTrigger: commit
     buildCommand: npm install --omit=dev
     startCommand: npm start
     healthCheckPath: /healthz
     envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # Encrypts every OAuth token. Render generates a random 256-bit base64 value once and keeps it.
+      - key: ENCRYPTION_KEY
+        generateValue: true
+      # PUBLIC_URL is not needed: the server falls back to RENDER_EXTERNAL_URL, which Render sets for you.
+      # From your GitHub OAuth App (Settings -> Developer settings -> OAuth Apps):
       - key: GITHUB_CLIENT_ID
         sync: false
       - key: GITHUB_CLIENT_SECRET
         sync: false
-      - key: PUBLIC_URL
-        sync: false
-      - key: ENCRYPTION_KEY
-        sync: false
+      # GitHub logins allowed to sign in, comma separated (e.g. Zohaib8090).
       - key: ALLOWED_GITHUB_USERS
         sync: false
+      # true = every repo, no confirmations. false = use ALLOWED_REPOS / READ_ONLY / ENABLE_DESTRUCTIVE.
       - key: FULL_CONTROL
         value: "true"
