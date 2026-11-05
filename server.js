@@ -50,7 +50,10 @@ if (AUTH_MODE === "oauth") {
     refreshTtl: Number(process.env.REFRESH_TOKEN_TTL || 30 * 24 * 3600),
   }, sealer, (e) => console.log(JSON.stringify({ t: new Date().toISOString(), ...e })));
 } else {
-  if (!GITHUB_TOKEN) die("GITHUB_TOKEN is required in static mode");
+  if (!GITHUB_TOKEN) {
+    die("No auth configured. OAuth mode: set GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, ENCRYPTION_KEY and " +
+        "ALLOWED_GITHUB_USERS (or AUTH_MODE=oauth). Static mode: set GITHUB_TOKEN and MCP_SECRET.");
+  }
   if (!MCP_SECRET || MCP_SECRET.length < 24) die("MCP_SECRET (24+ chars) is required in static mode");
 }
 if (!FULL_CONTROL && !ALLOWED_REPOS.length) { console.error("ALLOWED_REPOS is required when FULL_CONTROL=false"); process.exit(1); }
@@ -132,7 +135,7 @@ function buildServer() {
     wrap(async ({ owner, repo }) => { assertRepo(owner, repo); return gh("GET", `/repos/${owner}/${repo}`); }));
 
   s.tool("gh_update_repo", "Update repo settings (description, homepage, visibility, default_branch, topics, features, archived).",
-    { ...R, settings: z.record(z.any()).describe("Fields for PATCH /repos/{owner}/{repo}"), topics: z.array(z.string()).optional() },
+    { ...R, settings: z.record(z.string(), z.any()).describe("Fields for PATCH /repos/{owner}/{repo}"), topics: z.array(z.string()).optional() },
     wrap(async ({ owner, repo, settings, topics }) => {
       assertRepo(owner, repo); assertWritable(); audit("update_repo", { owner, repo, keys: Object.keys(settings) });
       if (settings.visibility || settings.archived === true) assertDestructive(settings.confirm, `${owner}/${repo}`);
@@ -174,7 +177,7 @@ function buildServer() {
     }));
 
   s.tool("gh_dispatch_workflow", "Trigger a workflow_dispatch run.",
-    { ...R, workflow: z.string().describe("id or filename"), ref: z.string().default("main"), inputs: z.record(z.string()).optional() },
+    { ...R, workflow: z.string().describe("id or filename"), ref: z.string().default("main"), inputs: z.record(z.string(), z.string()).optional() },
     wrap(async ({ owner, repo, workflow, ref, inputs }) => {
       assertRepo(owner, repo); assertWritable(); audit("dispatch", { owner, repo, workflow, ref });
       await gh("POST", `/repos/${owner}/${repo}/actions/workflows/${workflow}/dispatches`, { body: { ref, inputs } });
@@ -237,7 +240,7 @@ function buildServer() {
     wrap(async ({ owner, repo, branch }) => { assertRepo(owner, repo); return gh("GET", `/repos/${owner}/${repo}/branches/${branch}/protection`); }));
 
   s.tool("gh_set_branch_protection", "Set branch protection. Provide the full GitHub protection payload.",
-    { ...R, branch: z.string().default("main"), rules: z.record(z.any()) },
+    { ...R, branch: z.string().default("main"), rules: z.record(z.string(), z.any()) },
     wrap(async ({ owner, repo, branch, rules }) => {
       assertRepo(owner, repo); assertWritable(); audit("set_protection", { owner, repo, branch });
       await gh("PUT", `/repos/${owner}/${repo}/branches/${branch}/protection`, { body: rules }); return "Protection updated";
@@ -284,7 +287,7 @@ function buildServer() {
 
   // ---- Escape hatch for "full control"
   s.tool("gh_api", "Call any GitHub REST endpoint. Repo paths must be inside the allowlist. DELETE needs ENABLE_DESTRUCTIVE and confirm = the exact path. Non-repo paths are GET only.",
-    { method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]), path: z.string().describe("e.g. /repos/Zohaib8090/KodrixIDE/issues"), query: z.record(z.string()).optional(), body: z.record(z.any()).optional(), confirm: z.string().optional() },
+    { method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]), path: z.string().describe("e.g. /repos/Zohaib8090/KodrixIDE/issues"), query: z.record(z.string(), z.string()).optional(), body: z.record(z.string(), z.any()).optional(), confirm: z.string().optional() },
     wrap(async ({ method, path, query, body, confirm }) => {
       if (!path.startsWith("/") || path.includes("..")) throw new Error("Invalid path");
       const m = path.match(/^\/repos\/([^/]+)\/([^/?]+)/);

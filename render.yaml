@@ -13,6 +13,9 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
+      # Force OAuth mode so a missing variable gives a clear error instead of falling back to static mode.
+      - key: AUTH_MODE
+        value: oauth
       # Encrypts every OAuth token. Render generates a random 256-bit base64 value once and keeps it.
       - key: ENCRYPTION_KEY
         generateValue: true
