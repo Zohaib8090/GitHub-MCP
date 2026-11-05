@@ -11,16 +11,20 @@ const PORT = process.env.PORT || 3000;
 // Comma separated: "Zohaib8090/*" or "Zohaib8090/KodrixIDE,Zohaib8090/Zohara-OS"
 const ALLOWED_REPOS = (process.env.ALLOWED_REPOS || "")
   .split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
-const READ_ONLY = process.env.READ_ONLY === "true";
-const ENABLE_DESTRUCTIVE = process.env.ENABLE_DESTRUCTIVE === "true";
+// FULL_CONTROL (default ON): no allowlist, no read-only, no confirmations. Set FULL_CONTROL=false to
+// bring the guardrails back (ALLOWED_REPOS, READ_ONLY, ENABLE_DESTRUCTIVE + confirm strings).
+const FULL_CONTROL = process.env.FULL_CONTROL !== "false";
+const READ_ONLY = !FULL_CONTROL && process.env.READ_ONLY === "true";
+const ENABLE_DESTRUCTIVE = FULL_CONTROL || process.env.ENABLE_DESTRUCTIVE === "true";
 const SELF_URL = process.env.RENDER_EXTERNAL_URL; // set automatically on Render
 
 if (!GITHUB_TOKEN) { console.error("GITHUB_TOKEN is required"); process.exit(1); }
 if (!MCP_SECRET || MCP_SECRET.length < 24) { console.error("MCP_SECRET (24+ chars) is required"); process.exit(1); }
-if (!ALLOWED_REPOS.length) { console.error("ALLOWED_REPOS is required, e.g. Zohaib8090/*"); process.exit(1); }
+if (!FULL_CONTROL && !ALLOWED_REPOS.length) { console.error("ALLOWED_REPOS is required when FULL_CONTROL=false"); process.exit(1); }
 
-// ---------------------------------------------------------------- guardrails
+// ---------------------------------------------------------------- guardrails (skipped in FULL_CONTROL)
 function repoAllowed(owner, repo) {
+  if (FULL_CONTROL) return true;
   const full = `${owner}/${repo}`.toLowerCase();
   return ALLOWED_REPOS.some((p) => p === full || (p.endsWith("/*") && full.startsWith(p.slice(0, -1))));
 }
@@ -31,6 +35,7 @@ function assertWritable() {
   if (READ_ONLY) throw new Error("Server is in READ_ONLY mode");
 }
 function assertDestructive(confirm, expected) {
+  if (FULL_CONTROL) return;
   assertWritable();
   if (!ENABLE_DESTRUCTIVE) throw new Error("Destructive actions are disabled (set ENABLE_DESTRUCTIVE=true)");
   if (confirm !== expected) throw new Error(`Confirmation required: pass confirm="${expected}"`);
@@ -76,7 +81,7 @@ function buildServer() {
   s.tool("gh_whoami", "Show the GitHub user the token belongs to, plus active guardrail settings.", {},
     wrap(async () => {
       const me = await gh("GET", "/user");
-      return { login: me.login, allowed_repos: ALLOWED_REPOS, read_only: READ_ONLY, destructive_enabled: ENABLE_DESTRUCTIVE };
+      return { login: me.login, full_control: FULL_CONTROL, allowed_repos: FULL_CONTROL ? "all" : ALLOWED_REPOS, read_only: READ_ONLY, destructive_enabled: ENABLE_DESTRUCTIVE };
     }));
 
   s.tool("gh_list_repos", "List repositories you own that are inside the allowlist.",
@@ -155,7 +160,19 @@ function buildServer() {
       await gh("POST", `/repos/${owner}/${repo}/actions/runs/${run_id}/cancel`); return "Cancel requested";
     }));
 
-  s.tool("gh_list_secret_names", "List Actions secret NAMES (values are never readable).", R,
+  s.tool("gh_set_actions_secret", "Create or update a repo Actions secret (value is encrypted client-side before sending).",
+    { ...R, name: z.string(), value: z.string() },
+    wrap(async ({ owner, repo, name, value }) => {
+      assertRepo(owner, repo); assertWritable(); audit("set_secret", { owner, repo, name });
+      const sodium = (await import("libsodium-wrappers")).default; await sodium.ready;
+      const pk = await gh("GET", `/repos/${owner}/${repo}/actions/secrets/public-key`);
+      const key = sodium.from_base64(pk.key, sodium.base64_variants.ORIGINAL);
+      const enc = sodium.to_base64(sodium.crypto_box_seal(sodium.from_string(value), key), sodium.base64_variants.ORIGINAL);
+      await gh("PUT", `/repos/${owner}/${repo}/actions/secrets/${name}`, { body: { encrypted_value: enc, key_id: pk.key_id } });
+      return `Secret ${name} set`;
+    }));
+
+  s.tool("gh_list_secret_names","List Actions secret NAMES (values are never readable).", R,
     wrap(async ({ owner, repo }) => { assertRepo(owner, repo); return (await gh("GET", `/repos/${owner}/${repo}/actions/secrets`)).secrets.map((x) => x.name); }));
 
   // ---- Releases
@@ -202,7 +219,7 @@ function buildServer() {
       return { id: h.id };
     }));
 
-  s.tool("gh_delete_webhook", "Delete a webhook (needs confirm = \"owner/repo#hook_id\").", { ...R, hook_id: z.number(), confirm: z.string() },
+  s.tool("gh_delete_webhook", "Delete a webhook (needs confirm = \"owner/repo#hook_id\").", { ...R, hook_id: z.number(), confirm: z.string().optional() },
     wrap(async ({ owner, repo, hook_id, confirm }) => {
       assertRepo(owner, repo); assertDestructive(confirm, `${owner}/${repo}#${hook_id}`); audit("delete_webhook", { owner, repo, hook_id });
       await gh("DELETE", `/repos/${owner}/${repo}/hooks/${hook_id}`); return "Deleted";
@@ -224,7 +241,7 @@ function buildServer() {
 
   // ---- Destructive
   s.tool("gh_delete_repo", "PERMANENTLY delete a repository. Needs ENABLE_DESTRUCTIVE=true and confirm = \"owner/repo\". Token must have Administration permission.",
-    { ...R, confirm: z.string() },
+    { ...R, confirm: z.string().optional() },
     wrap(async ({ owner, repo, confirm }) => {
       assertRepo(owner, repo); assertDestructive(confirm, `${owner}/${repo}`); audit("DELETE_REPO", { owner, repo });
       await gh("DELETE", `/repos/${owner}/${repo}`); return `Deleted ${owner}/${repo}`;
@@ -237,7 +254,7 @@ function buildServer() {
       if (!path.startsWith("/") || path.includes("..")) throw new Error("Invalid path");
       const m = path.match(/^\/repos\/([^/]+)\/([^/?]+)/);
       if (m) assertRepo(m[1], m[2]);
-      else if (method !== "GET") throw new Error("Only GET is allowed outside /repos/{owner}/{repo}");
+      else if (method !== "GET" && !FULL_CONTROL) throw new Error("Only GET is allowed outside /repos/{owner}/{repo}");
       if (method !== "GET") audit("api", { method, path });
       if (method === "DELETE") assertDestructive(confirm, path);
       else if (method !== "GET") assertWritable();
@@ -272,7 +289,7 @@ const notAllowed = (_req, res) => res.status(405).json({ jsonrpc: "2.0", error: 
 app.get("/mcp/:secret", notAllowed); app.get("/mcp", notAllowed);
 app.delete("/mcp/:secret", notAllowed); app.delete("/mcp", notAllowed);
 
-app.listen(PORT, () => console.log(`github-mcp listening on :${PORT} (read_only=${READ_ONLY}, destructive=${ENABLE_DESTRUCTIVE})`));
+app.listen(PORT, () => console.log(`github-mcp listening on :${PORT} (full_control=${FULL_CONTROL}, read_only=${READ_ONLY}, destructive=${ENABLE_DESTRUCTIVE})`));
 
 // keep the free Render instance awake
 if (SELF_URL) setInterval(() => fetch(`${SELF_URL}/healthz`).catch(() => {}), 10 * 60 * 1000);

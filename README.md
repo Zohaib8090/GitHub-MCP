@@ -3,7 +3,12 @@
 Custom GitHub MCP connector for Claude, with guardrails. Fills the gaps of the official connector
 (Actions runs/logs, releases with assets, branch protection, webhooks, Pages, repo settings, generic REST call).
 
-## Guardrails
+## Full control (default)
+`FULL_CONTROL=true` (the default) turns every guardrail below off: all repos, all writes, deletes with no
+confirmation, and `gh_api` can POST/PUT/PATCH/DELETE any endpoint. Only the secret URL still protects the endpoint.
+Set `FULL_CONTROL=false` to enable the guardrails.
+
+## Guardrails (only when FULL_CONTROL=false)
 - `ALLOWED_REPOS` allowlist, every repo tool checks it
 - `READ_ONLY=true` blocks every write
 - Destructive actions (delete repo/webhook, DELETE via `gh_api`, making a repo private/public or archiving) need

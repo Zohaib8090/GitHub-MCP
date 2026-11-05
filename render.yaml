@@ -11,9 +11,5 @@ services:
         sync: false
       - key: MCP_SECRET
         sync: false
-      - key: ALLOWED_REPOS
-        value: Zohaib8090/*
-      - key: READ_ONLY
-        value: "false"
-      - key: ENABLE_DESTRUCTIVE
-        value: "false"
+      - key: FULL_CONTROL
+        value: "true"
