@@ -292,4 +292,19 @@ app.delete("/mcp", notAllowed);
 app.listen(PORT, () => console.log(`github-mcp listening on :${PORT} (auth=${AUTH_MODE}, full_control=${FULL_CONTROL}, read_only=${READ_ONLY}, destructive=${ENABLE_DESTRUCTIVE})`));
 
 // keep the free Render instance awake
-if (SELF_URL) setInterval(() => fetch(`${SELF_URL}/healthz`).catch(() => {}), 10 * 60 * 1000);
+// Keep-alive: Render's free tier sleeps after ~15 min without inbound traffic. Pinging our own public URL
+// (through Render's proxy, so it counts as inbound) every few minutes keeps the instance awake.
+// Set KEEPALIVE_MINUTES=0 to disable, or to another number to change the interval (default 4).
+const KEEPALIVE_MS = Number(process.env.KEEPALIVE_MINUTES ?? 4) * 60 * 1000;
+if (SELF_URL && KEEPALIVE_MS > 0) {
+  const ping = async () => {
+    try {
+      const r = await fetch(`${SELF_URL}/healthz`, { signal: AbortSignal.timeout(20000) });
+      if (!r.ok) console.log(JSON.stringify({ t: new Date().toISOString(), keepalive: "bad_status", status: r.status }));
+    } catch (e) {
+      console.log(JSON.stringify({ t: new Date().toISOString(), keepalive: "failed", error: String(e.message || e) }));
+    }
+  };
+  setInterval(ping, KEEPALIVE_MS).unref();
+  console.log(`keep-alive: pinging ${SELF_URL}/healthz every ${KEEPALIVE_MS / 60000} min`);
+}

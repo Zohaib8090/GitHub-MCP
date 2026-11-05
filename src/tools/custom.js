@@ -116,7 +116,7 @@ export default [
       return { path: d.path, sha: d.sha, size: d.size, content: cut(text, a.max_chars, a.offset) };
     } },
 
-  { toolset: "git", name: "gh_put_file",
+  { toolset: "git", name: "gh_create_or_update_file",
     description: "Create or update ONE file with a commit (sha is looked up automatically). For several files use gh_push_files.",
     shape: { ...R, path: z.string(), content: z.string(), message: z.string(), branch: z.string().optional(), encoding: z.enum(["utf-8", "base64"]).default("utf-8"), sha: z.string().optional(), author: PERSON, committer: PERSON },
     async handler(a) {
@@ -187,7 +187,7 @@ export default [
     } },
 
   // ------------------------------------------------------------------ pulls
-  { toolset: "pulls", name: "gh_get_pull_diff",
+  { toolset: "pulls", name: "gh_get_pr_diff",
     description: "The unified diff (or .patch) of a whole pull request as text.",
     shape: { ...R, pull_number: z.number(), format: z.enum(["diff", "patch"]).default("diff"), max_chars: z.number().default(100000), offset: z.number().default(0) },
     async handler(a) {

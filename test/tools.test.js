@@ -173,19 +173,19 @@ test("gh_get_file decodes content and lists directories", async () => {
   assert.deepEqual((await call(full, "gh_get_file", { owner: "o", repo: "r", path: "src" })).json, [{ name: "a.txt", type: "file", size: 5, path: "src/a.txt" }]);
 });
 
-test("gh_put_file creates, then updates with the looked-up sha", async () => {
+test("gh_create_or_update_file creates, then updates with the looked-up sha", async () => {
   let exists = false;
   routes = {
     "GET /repos/o/r/contents/new.md": () => (exists ? { sha: "old-sha", path: "new.md" } : { status: 404, json: { message: "Not Found" } }),
     "PUT /repos/o/r/contents/new.md": () => ({ commit: { sha: "c1", html_url: "u" }, content: { sha: "f1" } }),
   };
-  let r = await call(full, "gh_put_file", { owner: "o", repo: "r", path: "new.md", content: "hi", message: "m" });
+  let r = await call(full, "gh_create_or_update_file", { owner: "o", repo: "r", path: "new.md", content: "hi", message: "m" });
   const put1 = r.calls.find((c) => c.method === "PUT");
   assert.equal(put1.body.sha, undefined);
   assert.equal(Buffer.from(put1.body.content, "base64").toString(), "hi");
   assert.equal(r.json.created, true);
   exists = true;
-  r = await call(full, "gh_put_file", { owner: "o", repo: "r", path: "new.md", content: "bye", message: "m", branch: "dev" });
+  r = await call(full, "gh_create_or_update_file", { owner: "o", repo: "r", path: "new.md", content: "bye", message: "m", branch: "dev" });
   assert.equal(r.calls.find((c) => c.method === "PUT").body.sha, "old-sha");
   assert.equal(r.json.created, false);
 });
@@ -269,11 +269,11 @@ test("gh_create_branch / gh_create_tag (annotated) / gh_update_ref", async () =>
   assert.equal(r.calls[0].body.force, true);
 });
 
-test("gh_get_pull_diff, copilot review, draft toggle, search pulls", async () => {
+test("gh_get_pr_diff, copilot review, draft toggle, search pulls", async () => {
   routes = { "GET /repos/o/r/pulls/5": (c) => (c.accept.includes("diff") ? { text: "diff --git a b" } : { draft: false, node_id: "PR_1" }),
     "POST /repos/o/r/pulls/5/requested_reviewers": {}, "POST /graphql": { data: { ok: 1 } },
     "GET /search/issues": { total_count: 1, items: [{ number: 5, title: "t", state: "open", user: { login: "me" }, repository_url: "https://api.github.com/repos/o/r", html_url: "u" }] } };
-  assert.equal((await call(full, "gh_get_pull_diff", { owner: "o", repo: "r", pull_number: 5 })).text, "diff --git a b");
+  assert.equal((await call(full, "gh_get_pr_diff", { owner: "o", repo: "r", pull_number: 5 })).text, "diff --git a b");
   let r = await call(full, "gh_request_copilot_review", { owner: "o", repo: "r", pull_number: 5 });
   assert.deepEqual(r.calls[0].body.reviewers, ["copilot-pull-request-reviewer[bot]"]);
   r = await call(full, "gh_set_pull_draft", { owner: "o", repo: "r", pull_number: 5, draft: true });
