@@ -6,24 +6,16 @@ import { z } from "zod";
 import { als, currentToken } from "./src/context.js";
 import { makeSealer } from "./src/crypto.js";
 import { createOAuth } from "./src/oauth.js";
+import { GITHUB_TOKEN, GITHUB_API_URL, GITHUB_WEB_URL, ALLOWED_REPOS, FULL_CONTROL, READ_ONLY, ENABLE_DESTRUCTIVE,
+  repoAllowed, assertRepo, assertWritable, assertDestructive, audit, gh, ok, wrap, R } from "./src/core.js";
+import { registerAllTools, activeToolsets, toolCount } from "./src/tools/index.js";
 
 // ---------------------------------------------------------------- config
 // AUTH_MODE=oauth  (default when GITHUB_CLIENT_ID is set): sign in with GitHub, per-user encrypted tokens.
 // AUTH_MODE=static: one GITHUB_TOKEN (PAT) + secret URL. Handy for local dev only.
 const AUTH_MODE = process.env.AUTH_MODE || (process.env.GITHUB_CLIENT_ID ? "oauth" : "static");
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const MCP_SECRET = process.env.MCP_SECRET; // static mode only: long random string, part of the URL
-const GITHUB_API_URL = (process.env.GITHUB_API_URL || "https://api.github.com").replace(/\/$/, "");
-const GITHUB_WEB_URL = (process.env.GITHUB_WEB_URL || "https://github.com").replace(/\/$/, "");
 const PORT = process.env.PORT || 3000;
-// Comma separated: "Zohaib8090/*" or "Zohaib8090/KodrixIDE,Zohaib8090/Zohara-OS"
-const ALLOWED_REPOS = (process.env.ALLOWED_REPOS || "")
-  .split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
-// FULL_CONTROL (default ON): no allowlist, no read-only, no confirmations. Set FULL_CONTROL=false to
-// bring the guardrails back (ALLOWED_REPOS, READ_ONLY, ENABLE_DESTRUCTIVE + confirm strings).
-const FULL_CONTROL = process.env.FULL_CONTROL !== "false";
-const READ_ONLY = !FULL_CONTROL && process.env.READ_ONLY === "true";
-const ENABLE_DESTRUCTIVE = FULL_CONTROL || process.env.ENABLE_DESTRUCTIVE === "true";
 const SELF_URL = process.env.RENDER_EXTERNAL_URL; // set automatically on Render
 
 function die(msg) { console.error(msg); process.exit(1); }
@@ -42,7 +34,7 @@ if (AUTH_MODE === "oauth") {
     githubClientSecret: process.env.GITHUB_CLIENT_SECRET,
     githubWeb: GITHUB_WEB_URL,
     githubApi: GITHUB_API_URL,
-    scopes: process.env.GITHUB_SCOPES || "repo workflow delete_repo admin:repo_hook read:org gist",
+    scopes: process.env.GITHUB_SCOPES || "repo workflow delete_repo admin:repo_hook admin:org gist notifications user project codespace write:packages delete:packages admin:public_key admin:gpg_key write:discussion",
     allowedUsers: list(process.env.ALLOWED_GITHUB_USERS),
     allowedRedirectHosts: list(process.env.ALLOWED_REDIRECT_HOSTS || "claude.ai,claude.com"),
     allowLocalhost: process.env.ALLOW_LOCALHOST_REDIRECTS === "true",
@@ -58,68 +50,14 @@ if (AUTH_MODE === "oauth") {
 }
 if (!FULL_CONTROL && !ALLOWED_REPOS.length) { console.error("ALLOWED_REPOS is required when FULL_CONTROL=false"); process.exit(1); }
 
-// ---------------------------------------------------------------- guardrails (skipped in FULL_CONTROL)
-function repoAllowed(owner, repo) {
-  if (FULL_CONTROL) return true;
-  const full = `${owner}/${repo}`.toLowerCase();
-  return ALLOWED_REPOS.some((p) => p === full || (p.endsWith("/*") && full.startsWith(p.slice(0, -1))));
-}
-function assertRepo(owner, repo) {
-  if (!repoAllowed(owner, repo)) throw new Error(`Repo ${owner}/${repo} is not in ALLOWED_REPOS`);
-}
-function assertWritable() {
-  if (READ_ONLY) throw new Error("Server is in READ_ONLY mode");
-}
-function assertDestructive(confirm, expected) {
-  if (FULL_CONTROL) return;
-  assertWritable();
-  if (!ENABLE_DESTRUCTIVE) throw new Error("Destructive actions are disabled (set ENABLE_DESTRUCTIVE=true)");
-  if (confirm !== expected) throw new Error(`Confirmation required: pass confirm="${expected}"`);
-}
-function audit(action, detail) {
-  console.log(JSON.stringify({ t: new Date().toISOString(), action, ...detail }));
-}
-
-// ---------------------------------------------------------------- GitHub client
-async function gh(method, path, { body, query, raw, headers } = {}) {
-  const token = currentToken() || GITHUB_TOKEN;
-  if (!token) throw new Error("Not authenticated with GitHub");
-  const url = new URL(path.startsWith("http") ? path : `${GITHUB_API_URL}${path}`);
-  for (const [k, v] of Object.entries(query || {})) if (v !== undefined) url.searchParams.set(k, String(v));
-  const res = await fetch(url, {
-    method,
-    redirect: raw ? "manual" : "follow",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      "User-Agent": "zohaib-github-mcp",
-      ...(body && !(body instanceof Buffer) ? { "Content-Type": "application/json" } : {}),
-      ...headers,
-    },
-    body: body ? (body instanceof Buffer ? body : JSON.stringify(body)) : undefined,
-  });
-  if (raw) return res;
-  const text = await res.text();
-  let data; try { data = text ? JSON.parse(text) : null; } catch { data = text; }
-  if (!res.ok) throw new Error(`GitHub ${res.status}: ${typeof data === "string" ? data : JSON.stringify(data)}`);
-  return data;
-}
-const ok = (data) => ({ content: [{ type: "text", text: typeof data === "string" ? data : JSON.stringify(data, null, 2) }] });
-const wrap = (fn) => async (args) => {
-  try { return ok(await fn(args)); }
-  catch (e) { return { isError: true, content: [{ type: "text", text: String(e.message || e) }] }; }
-};
-const R = { owner: z.string(), repo: z.string() };
-
 // ---------------------------------------------------------------- tools
 function buildServer() {
-  const s = new McpServer({ name: "github-custom", version: "1.0.0" });
+  const s = new McpServer({ name: "github-custom", version: "2.0.0" });
 
   s.tool("gh_whoami", "Show the GitHub user the token belongs to, plus active guardrail settings.", {},
     wrap(async () => {
       const me = await gh("GET", "/user");
-      return { login: me.login, auth_mode: AUTH_MODE, full_control: FULL_CONTROL, allowed_repos: FULL_CONTROL ? "all" : ALLOWED_REPOS, read_only: READ_ONLY, destructive_enabled: ENABLE_DESTRUCTIVE };
+      return { login: me.login, auth_mode: AUTH_MODE, full_control: FULL_CONTROL, allowed_repos: FULL_CONTROL ? "all" : ALLOWED_REPOS, read_only: READ_ONLY, destructive_enabled: ENABLE_DESTRUCTIVE, toolsets: activeToolsets(), tool_count: toolCount() };
     }));
 
   s.tool("gh_list_repos", "List repositories you own that are inside the allowlist.",
@@ -299,6 +237,7 @@ function buildServer() {
       return gh(method, path, { query, body });
     }));
 
+  registerAllTools(s);
   return s;
 }
 

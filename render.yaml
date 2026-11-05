@@ -31,3 +31,6 @@ services:
       # true = every repo, no confirmations. false = use ALLOWED_REPOS / READ_ONLY / ENABLE_DESTRUCTIVE.
       - key: FULL_CONTROL
         value: "true"
+      # Which tool groups to expose. "all" or e.g. "repos,git,issues,pulls" or "all,-codespaces,-packages". See TOOLS.md.
+      - key: GITHUB_TOOLSETS
+        value: all

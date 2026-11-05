@@ -53,15 +53,54 @@ GitHub -> Settings -> Applications.
 
 ## Tools
 
-| Area | Tools |
-| --- | --- |
-| Account | `gh_whoami`, `gh_list_repos`, `gh_get_repo`, `gh_update_repo` |
-| Actions | `gh_list_workflows`, `gh_list_runs`, `gh_get_run_jobs`, `gh_get_job_logs`, `gh_dispatch_workflow`, `gh_rerun_run`, `gh_cancel_run`, `gh_list_secret_names`, `gh_set_actions_secret` |
-| Releases | `gh_create_release`, `gh_upload_release_asset` |
-| Admin | `gh_get_branch_protection`, `gh_set_branch_protection`, `gh_list_webhooks`, `gh_create_webhook`, `gh_delete_webhook`, `gh_get_pages`, `gh_enable_pages`, `gh_list_deploy_keys`, `gh_delete_repo` |
-| Anything else | `gh_api` (any REST endpoint) |
+**390+ tools** covering the GitHub API. The full list is in [TOOLS.md](TOOLS.md).
 
-Every write is logged to stdout (visible in your host's logs). Tokens are never logged.
+| Toolset | What it covers |
+| --- | --- |
+| core (always on) | whoami, repos, Actions runs/logs/secrets, releases, branch protection, webhooks, Pages, `gh_api` (any REST endpoint) |
+| `repos` | create/fork/transfer/delete repos, branches, tags, commits, compare, collaborators, traffic, stars, topics, deploy keys, security toggles |
+| `git` | read/write files, **multi-file commits** (`gh_push_files`), trees, blobs, refs |
+| `issues` | issues, comments, labels, milestones, assignees, sub-issues, reactions, timeline |
+| `pulls` | PRs, diffs, reviews, inline comments, review threads, reviewers, Copilot review, merge |
+| `actions`, `environments` | runs, jobs, artifacts, caches, variables, secrets, runners, permissions, environments |
+| `checks`, `deployments` | check runs/suites, commit statuses, deployments |
+| `security`, `rulesets` | Dependabot, code scanning, secret scanning, advisories, SBOM, rulesets |
+| `releases`, `webhooks`, `pages` | release/asset management, webhook deliveries, Pages builds |
+| `search` | repos, code, commits, issues, PRs, users, topics |
+| `gists`, `users`, `orgs`, `notifications` | gists, profile/keys/follows, orgs/teams/members, notifications inbox |
+| `projects`, `discussions`, `graphql` | Projects (v2), Discussions, raw GraphQL |
+| `codespaces`, `packages`, `meta` | codespaces, packages, rate limit, licenses, markdown rendering |
+
+### Keep the tool list lean
+
+Every tool costs a little context in each chat. Pick what you need with `GITHUB_TOOLSETS`:
+
+```
+GITHUB_TOOLSETS=all                          # default
+GITHUB_TOOLSETS=repos,git,issues,pulls       # just the day-to-day set
+GITHUB_TOOLSETS=all,-codespaces,-packages    # everything except these
+```
+
+List responses are slimmed to the useful fields; pass `full: true` to any tool that has it to get the raw GitHub JSON.
+After changing the tool list, reconnect the connector (or start a new chat) so Claude refreshes it.
+
+Destructive tools (deletes, force pushes, transfers) need no confirmation under `FULL_CONTROL=true`. With
+`FULL_CONTROL=false` they need `ENABLE_DESTRUCTIVE=true` and `confirm` set to the exact request path.
+Writes are logged to stdout. Tokens are never logged.
+
+### Adding a tool
+
+Most tools are one line of data in `src/tools/specs/*.js`:
+
+```js
+["gh_lock_issue", "PUT /repos/{owner}/{repo}/issues/{issue_number:n}/lock", "Lock an issue.", "b.lock_reason?:s"]
+```
+
+`npm test` calls every spec against a mock GitHub and checks method, path, query and body.
+Tools that need several API calls live in `src/tools/custom.js`.
+
+The default OAuth scopes are broad (`repo workflow delete_repo admin:repo_hook admin:org gist notifications user project codespace ...`).
+Narrow them with `GITHUB_SCOPES` if you do not need everything.
 
 ## Run locally
 

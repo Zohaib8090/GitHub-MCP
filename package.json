@@ -1,7 +1,7 @@
 {
   "name": "github-mcp",
-  "version": "1.0.0",
-  "description": "Custom GitHub MCP connector with guardrails: repo allowlist, read-only mode, gated destructive actions",
+  "version": "2.0.0",
+  "description": "Self-hosted GitHub MCP connector with OAuth and 390+ tools",
   "type": "module",
   "main": "server.js",
   "scripts": {
