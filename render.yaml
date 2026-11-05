@@ -3,13 +3,19 @@ services:
     name: github-mcp
     runtime: node
     plan: free
-    buildCommand: npm install
+    buildCommand: npm install --omit=dev
     startCommand: npm start
     healthCheckPath: /healthz
     envVars:
-      - key: GITHUB_TOKEN
+      - key: GITHUB_CLIENT_ID
         sync: false
-      - key: MCP_SECRET
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: PUBLIC_URL
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: ALLOWED_GITHUB_USERS
         sync: false
       - key: FULL_CONTROL
         value: "true"

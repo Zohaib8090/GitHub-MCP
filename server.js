@@ -3,10 +3,18 @@ import crypto from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
+import { als, currentToken } from "./src/context.js";
+import { makeSealer } from "./src/crypto.js";
+import { createOAuth } from "./src/oauth.js";
 
 // ---------------------------------------------------------------- config
+// AUTH_MODE=oauth  (default when GITHUB_CLIENT_ID is set): sign in with GitHub, per-user encrypted tokens.
+// AUTH_MODE=static: one GITHUB_TOKEN (PAT) + secret URL. Handy for local dev only.
+const AUTH_MODE = process.env.AUTH_MODE || (process.env.GITHUB_CLIENT_ID ? "oauth" : "static");
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
-const MCP_SECRET = process.env.MCP_SECRET; // long random string, part of the URL
+const MCP_SECRET = process.env.MCP_SECRET; // static mode only: long random string, part of the URL
+const GITHUB_API_URL = (process.env.GITHUB_API_URL || "https://api.github.com").replace(/\/$/, "");
+const GITHUB_WEB_URL = (process.env.GITHUB_WEB_URL || "https://github.com").replace(/\/$/, "");
 const PORT = process.env.PORT || 3000;
 // Comma separated: "Zohaib8090/*" or "Zohaib8090/KodrixIDE,Zohaib8090/Zohara-OS"
 const ALLOWED_REPOS = (process.env.ALLOWED_REPOS || "")
@@ -18,8 +26,33 @@ const READ_ONLY = !FULL_CONTROL && process.env.READ_ONLY === "true";
 const ENABLE_DESTRUCTIVE = FULL_CONTROL || process.env.ENABLE_DESTRUCTIVE === "true";
 const SELF_URL = process.env.RENDER_EXTERNAL_URL; // set automatically on Render
 
-if (!GITHUB_TOKEN) { console.error("GITHUB_TOKEN is required"); process.exit(1); }
-if (!MCP_SECRET || MCP_SECRET.length < 24) { console.error("MCP_SECRET (24+ chars) is required"); process.exit(1); }
+function die(msg) { console.error(msg); process.exit(1); }
+let oauth = null;
+if (AUTH_MODE === "oauth") {
+  for (const k of ["GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET", "ENCRYPTION_KEY", "ALLOWED_GITHUB_USERS"]) {
+    if (!process.env[k]) die(`${k} is required in oauth mode`);
+  }
+  const baseUrl = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || "").replace(/\/$/, "");
+  if (!baseUrl) die("PUBLIC_URL is required in oauth mode (your https URL, no trailing slash)");
+  let sealer; try { sealer = makeSealer(process.env.ENCRYPTION_KEY); } catch (e) { die(e.message); }
+  const list = (v) => (v || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+  oauth = createOAuth({
+    baseUrl,
+    githubClientId: process.env.GITHUB_CLIENT_ID,
+    githubClientSecret: process.env.GITHUB_CLIENT_SECRET,
+    githubWeb: GITHUB_WEB_URL,
+    githubApi: GITHUB_API_URL,
+    scopes: process.env.GITHUB_SCOPES || "repo workflow delete_repo admin:repo_hook read:org gist",
+    allowedUsers: list(process.env.ALLOWED_GITHUB_USERS),
+    allowedRedirectHosts: list(process.env.ALLOWED_REDIRECT_HOSTS || "claude.ai,claude.com"),
+    allowLocalhost: process.env.ALLOW_LOCALHOST_REDIRECTS === "true",
+    accessTtl: Number(process.env.ACCESS_TOKEN_TTL || 3600),
+    refreshTtl: Number(process.env.REFRESH_TOKEN_TTL || 30 * 24 * 3600),
+  }, sealer, (e) => console.log(JSON.stringify({ t: new Date().toISOString(), ...e })));
+} else {
+  if (!GITHUB_TOKEN) die("GITHUB_TOKEN is required in static mode");
+  if (!MCP_SECRET || MCP_SECRET.length < 24) die("MCP_SECRET (24+ chars) is required in static mode");
+}
 if (!FULL_CONTROL && !ALLOWED_REPOS.length) { console.error("ALLOWED_REPOS is required when FULL_CONTROL=false"); process.exit(1); }
 
 // ---------------------------------------------------------------- guardrails (skipped in FULL_CONTROL)
@@ -46,13 +79,15 @@ function audit(action, detail) {
 
 // ---------------------------------------------------------------- GitHub client
 async function gh(method, path, { body, query, raw, headers } = {}) {
-  const url = new URL(path.startsWith("http") ? path : `https://api.github.com${path}`);
+  const token = currentToken() || GITHUB_TOKEN;
+  if (!token) throw new Error("Not authenticated with GitHub");
+  const url = new URL(path.startsWith("http") ? path : `${GITHUB_API_URL}${path}`);
   for (const [k, v] of Object.entries(query || {})) if (v !== undefined) url.searchParams.set(k, String(v));
   const res = await fetch(url, {
     method,
     redirect: raw ? "manual" : "follow",
     headers: {
-      Authorization: `Bearer ${GITHUB_TOKEN}`,
+      Authorization: `Bearer ${token}`,
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
       "User-Agent": "zohaib-github-mcp",
@@ -81,7 +116,7 @@ function buildServer() {
   s.tool("gh_whoami", "Show the GitHub user the token belongs to, plus active guardrail settings.", {},
     wrap(async () => {
       const me = await gh("GET", "/user");
-      return { login: me.login, full_control: FULL_CONTROL, allowed_repos: FULL_CONTROL ? "all" : ALLOWED_REPOS, read_only: READ_ONLY, destructive_enabled: ENABLE_DESTRUCTIVE };
+      return { login: me.login, auth_mode: AUTH_MODE, full_control: FULL_CONTROL, allowed_repos: FULL_CONTROL ? "all" : ALLOWED_REPOS, read_only: READ_ONLY, destructive_enabled: ENABLE_DESTRUCTIVE };
     }));
 
   s.tool("gh_list_repos", "List repositories you own that are inside the allowlist.",
@@ -266,30 +301,53 @@ function buildServer() {
 
 // ---------------------------------------------------------------- HTTP
 const app = express();
-app.use(express.json({ limit: "35mb" }));
+app.set("trust proxy", 1); // Render terminates TLS in front of us
+app.disable("x-powered-by");
+app.use((_req, res, next) => { res.set("X-Content-Type-Options", "nosniff"); next(); });
+if (oauth) app.use(oauth.router); // /.well-known/*, /register, /authorize, /token, /revoke, /github/callback
+app.use("/mcp", express.json({ limit: "35mb" }));
 
 app.get("/", (_req, res) => res.send("ok"));
 app.get("/healthz", (_req, res) => res.send("ok"));
 
 const safeEq = (a, b) => { const x = Buffer.from(a), y = Buffer.from(b); return x.length === y.length && crypto.timingSafeEqual(x, y); };
 
-async function handleMcp(req, res) {
+// Returns the request context ({ token, sub }) or null after sending a 401.
+function authenticate(req, res) {
+  if (AUTH_MODE === "oauth") {
+    const ctx = oauth.authenticate(req);
+    if (ctx) return ctx;
+    res.set("WWW-Authenticate", `Bearer resource_metadata="${oauth.baseUrl}/.well-known/oauth-protected-resource"`);
+    res.status(401).json({ error: "unauthorized" });
+    return null;
+  }
   const bearer = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
   const provided = req.params.secret || bearer;
-  if (!provided || !safeEq(provided, MCP_SECRET)) return res.status(401).json({ error: "unauthorized" });
+  if (!provided || !safeEq(provided, MCP_SECRET)) { res.status(401).json({ error: "unauthorized" }); return null; }
+  return { token: GITHUB_TOKEN, sub: "static" };
+}
+
+async function handleMcp(req, res) {
+  const ctx = authenticate(req, res);
+  if (!ctx) return;
   const server = buildServer();
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   res.on("close", () => { transport.close(); server.close(); });
-  await server.connect(transport);
-  await transport.handleRequest(req, res, req.body);
+  await als.run(ctx, async () => {
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+  });
 }
-app.post("/mcp/:secret", handleMcp);
+const notAllowed = (req, res) => {
+  if (!authenticate(req, res)) return;
+  res.status(405).json({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed" }, id: null });
+};
+if (AUTH_MODE === "static") { app.post("/mcp/:secret", handleMcp); app.get("/mcp/:secret", notAllowed); app.delete("/mcp/:secret", notAllowed); }
 app.post("/mcp", handleMcp);
-const notAllowed = (_req, res) => res.status(405).json({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed" }, id: null });
-app.get("/mcp/:secret", notAllowed); app.get("/mcp", notAllowed);
-app.delete("/mcp/:secret", notAllowed); app.delete("/mcp", notAllowed);
+app.get("/mcp", notAllowed);
+app.delete("/mcp", notAllowed);
 
-app.listen(PORT, () => console.log(`github-mcp listening on :${PORT} (full_control=${FULL_CONTROL}, read_only=${READ_ONLY}, destructive=${ENABLE_DESTRUCTIVE})`));
+app.listen(PORT, () => console.log(`github-mcp listening on :${PORT} (auth=${AUTH_MODE}, full_control=${FULL_CONTROL}, read_only=${READ_ONLY}, destructive=${ENABLE_DESTRUCTIVE})`));
 
 // keep the free Render instance awake
 if (SELF_URL) setInterval(() => fetch(`${SELF_URL}/healthz`).catch(() => {}), 10 * 60 * 1000);
