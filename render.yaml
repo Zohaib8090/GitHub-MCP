@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: github-mcp
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: MCP_SECRET
+        sync: false
+      - key: ALLOWED_REPOS
+        value: Zohaib8090/*
+      - key: READ_ONLY
+        value: "false"
+      - key: ENABLE_DESTRUCTIVE
+        value: "false"

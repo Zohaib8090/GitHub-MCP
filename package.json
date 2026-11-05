@@ -1,0 +1,18 @@
+{
+  "name": "github-mcp",
+  "version": "1.0.0",
+  "description": "Custom GitHub MCP connector with guardrails: repo allowlist, read-only mode, gated destructive actions",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "express": "^4.21.0",
+    "zod": "^3.23.8"
+  }
+}
